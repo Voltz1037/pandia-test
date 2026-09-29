@@ -2,6 +2,8 @@
 
 适用场景：本机 WSL 内运行 Sender/Receiver，使用 USB 摄像头实时采集，通过 WebRTC/GCC 传输，FFplay 实时显示并生成 MP4。
 
+> 本文默认使用 in/peerconnection_camera + camera_external_recorder.py。旧的 peerconnection_client_headless_ffplay_v2 FIFO 显示补丁与新版摄像头 Sender 的信令版本不同，暂不能直接混用；兼容性说明见 双机实时显示方案统一与待修改项.md。
+
 ## 0. 组件说明
 
 ```text

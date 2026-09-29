@@ -302,6 +302,9 @@ Failed to initialize the ADM
 
 ## 6. 实时显示和生成 MP4
 
+> 显示方案兼容性、旧 FIFO v2 补丁与新版摄像头 binary 的差异，见：docs/camera_receiver/双机实时显示方案统一与待修改项.md。当前双机摄像头测试先使用本文件的 in/peerconnection_camera + 外部录制方案；旧的 peerconnection_client_headless_ffplay_v2 不能直接与新版 Sender 配对。
+
+
 仓库同时提供：
 
 ```text

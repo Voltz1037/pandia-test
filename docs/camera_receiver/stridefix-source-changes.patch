@@ -1,0 +1,317 @@
+diff --git a/examples/peerconnection_headless/client/conductor.h b/examples/peerconnection_headless/client/conductor.h
+index b5a29bdfa3..f691f4b9c9 100755
+--- a/examples/peerconnection_headless/client/conductor.h
++++ b/examples/peerconnection_headless/client/conductor.h
+@@ -15,12 +15,19 @@
+ #include <map>
+ #include <memory>
+ #include <string>
++#include <utility>
+ #include <vector>
++#include <cstddef>
++#include <cstdint>
++#include <cstdio>
++#include <cerrno>
+ #include <fstream>
++#include <sstream>
+ 
+ #include "api/media_stream_interface.h"
+ #include "api/peer_connection_interface.h"
+ #include "examples/peerconnection_headless/client/peer_connection_client.h"
++#include "examples/peerconnection_headless/minicpm_bridge/media_bridge_interface.h"
+ #include "rtc_base/thread.h"
+ 
+ namespace webrtc {
+@@ -33,9 +40,14 @@ class VideoRenderer;
+ 
+ class cricket::VideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+   public:
+-   VideoRenderer(std::string name, webrtc::VideoTrackInterface* track_to_render)
++   VideoRenderer(std::string name,
++                 webrtc::VideoTrackInterface* track_to_render,
++                 std::shared_ptr<minicpm_bridge::MediaBridgeInterface>
++                     media_bridge = nullptr)
+        : name_(name), width_(0), height_(0), 
+-       shared_frames_(nullptr), rendered_track_(track_to_render)  {
++       shared_frames_(nullptr),
++       rendered_track_(track_to_render),
++       media_bridge_(std::move(media_bridge)) {
+      rendered_track_->AddOrUpdateSink(this, rtc::VideoSinkWants());
+      if (name_ == "remote") {
+     //    initSharedMemory();
+@@ -51,29 +63,100 @@ class cricket::VideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame
+    }
+ 
+    void OnFrame(const webrtc::VideoFrame& frame) {
+-      RTC_INFO << "Come to onframe" << dump_path_;
+-      if (dump_path_.size() > 1) {
+-        std::ostringstream filename;
+-        filename << dump_path_ << "/received_" << frame.first_rtp_sequence << ".yuv";
+-        std::ofstream wf(filename.str(), std::ios::out | std::ios::binary);
+-        if (!wf) {
+-          RTC_INFO << "Failed to open the dumping file";
+-          return;
+-        }
+-        int size = frame.width() * frame.height() * 3 / 2;
+-        uint8_t* data = new uint8_t[size];
+-        memcpy(data, frame.video_frame_buffer()->GetI420()->DataY(), frame.width() * frame.height());
+-        memcpy(data + frame.width() * frame.height(), frame.video_frame_buffer()->GetI420()->DataU(), 
+-            frame.width() * frame.height() / 4);
+-        memcpy(data + frame.width() * frame.height() * 5 / 4, frame.video_frame_buffer()->GetI420()->DataV(), 
+-            frame.width() * frame.height() / 4);
+-        wf.write((char*)data, size);
+-        wf.close();
+-        RTC_INFO << "Dump to " << filename.str() << ", " << 
+-            frame.width() << "x" << frame.height();
+-      } else {
++      if (media_bridge_) {
++        media_bridge_->OnVideoFrame(frame);
++        return;
++      }
++      if (dump_path_.size() <= 1) {
+         RTC_INFO << "dump_path_ size < 1";
++        return;
++      }
++
++      rtc::scoped_refptr<webrtc::I420BufferInterface> i420 =
++          frame.video_frame_buffer()->ToI420();
++      if (!i420) {
++        std::fprintf(stderr, "I420 export: conversion failed\n");
++        return;
++      }
++
++      const int width = i420->width();
++      const int height = i420->height();
++      const int chroma_width = (width + 1) / 2;
++      const int chroma_height = (height + 1) / 2;
++      const int stride_y = i420->StrideY();
++      const int stride_u = i420->StrideU();
++      const int stride_v = i420->StrideV();
++
++      if (width != dump_width_ || height != dump_height_ ||
++          stride_y != dump_stride_y_ || stride_u != dump_stride_u_ ||
++          stride_v != dump_stride_v_) {
++        dump_width_ = width;
++        dump_height_ = height;
++        dump_stride_y_ = stride_y;
++        dump_stride_u_ = stride_u;
++        dump_stride_v_ = stride_v;
++        std::fprintf(
++            stderr,
++            "I420 export: width=%d height=%d strideY=%d strideU=%d strideV=%d\n",
++            width, height, stride_y, stride_u, stride_v);
+       }
++
++      auto write_plane = [](std::ofstream& out, const uint8_t* data,
++                            int stride, int row_bytes, int rows) {
++        if (!data || stride < row_bytes || row_bytes <= 0 || rows <= 0) {
++          return false;
++        }
++        for (int row = 0; row < rows; ++row) {
++          const uint8_t* source =
++              data + static_cast<std::ptrdiff_t>(row) * stride;
++          out.write(reinterpret_cast<const char*>(source), row_bytes);
++          if (!out) {
++            return false;
++          }
++        }
++        return true;
++      };
++
++      std::ostringstream filename;
++      filename << dump_path_ << "/received_" << frame.first_rtp_sequence
++               << ".yuv";
++      std::ostringstream temporary_filename;
++      temporary_filename << filename.str() << ".tmp";
++
++      std::ofstream out(temporary_filename.str(),
++                        std::ios::out | std::ios::binary | std::ios::trunc);
++      if (!out) {
++        std::fprintf(stderr, "I420 export: failed to open %s, errno=%d\n",
++                     temporary_filename.str().c_str(), errno);
++        return;
++      }
++
++      const bool ok =
++          write_plane(out, i420->DataY(), stride_y, width, height) &&
++          write_plane(out, i420->DataU(), stride_u, chroma_width,
++                      chroma_height) &&
++          write_plane(out, i420->DataV(), stride_v, chroma_width,
++                      chroma_height);
++      out.close();
++
++      if (!ok || !out) {
++        std::fprintf(stderr, "I420 export: frame write failed for %s\n",
++                     temporary_filename.str().c_str());
++        std::remove(temporary_filename.str().c_str());
++        return;
++      }
++
++      if (std::rename(temporary_filename.str().c_str(),
++                      filename.str().c_str()) != 0) {
++        std::fprintf(stderr, "I420 export: rename failed for %s, errno=%d\n",
++                     filename.str().c_str(), errno);
++        std::remove(temporary_filename.str().c_str());
++        return;
++      }
++
++      RTC_INFO << "Dump to " << filename.str() << ", " << width << "x"
++               << height << ", stride " << stride_y << "/" << stride_u << "/"
++               << stride_v;
+    }
+ 
+    protected:
+@@ -93,6 +176,12 @@ class cricket::VideoRenderer : public rtc::VideoSinkInterface<webrtc::VideoFrame
+    struct shared_frames* shared_frames_;
+    unsigned char* shared_memory_;
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> rendered_track_;
++   std::shared_ptr<minicpm_bridge::MediaBridgeInterface> media_bridge_;
++     int dump_width_ = 0;
++     int dump_height_ = 0;
++     int dump_stride_y_ = 0;
++     int dump_stride_u_ = 0;
++     int dump_stride_v_ = 0;
+  };
+ 
+ class Conductor : public webrtc::PeerConnectionObserver,
+@@ -108,7 +197,10 @@ class Conductor : public webrtc::PeerConnectionObserver,
+   };
+ 
+   Conductor(PeerConnectionClient* client, bool receiving_only, 
+-            uint32_t width, uint32_t fps, std::string path, std::string dump_path);
++            uint32_t width, uint32_t fps, std::string path,
++            std::string dump_path,
++            std::shared_ptr<minicpm_bridge::MediaBridgeInterface>
++                media_bridge = nullptr);
+ 
+   bool connection_active() const;
+ 
+@@ -122,6 +214,7 @@ class Conductor : public webrtc::PeerConnectionObserver,
+   bool ReinitializePeerConnectionForLoopback();
+   bool CreatePeerConnection();
+   void AddTracks();
++  void AddBridgeAudioTrack();
+   void StartLocalRenderer(webrtc::VideoTrackInterface* local_video);
+   void StopLocalRenderer();
+   void StartRemoteRenderer(webrtc::VideoTrackInterface* remote_video);
+@@ -190,6 +283,7 @@ class Conductor : public webrtc::PeerConnectionObserver,
+   std::string server_;
+   std::unique_ptr<cricket::VideoRenderer> local_renderer_;
+   std::unique_ptr<cricket::VideoRenderer> remote_renderer_;
++  std::shared_ptr<minicpm_bridge::MediaBridgeInterface> media_bridge_;
+ };
+ 
+ #endif  // EXAMPLES_PEERCONNECTION_CLIENT_CONDUCTOR_H_
+diff --git a/video/video_receive_stream2.cc b/video/video_receive_stream2.cc
+index 74aad9d09a..1cb6df6d20 100755
+--- a/video/video_receive_stream2.cc
++++ b/video/video_receive_stream2.cc
+@@ -11,6 +11,7 @@
+ #include "video/video_receive_stream2.h"
+ 
+ #include <stdlib.h>
++#include <unistd.h>
+ #include <string.h>
+ 
+ #include <algorithm>
+@@ -19,7 +20,12 @@
+ #include <string>
+ #include <utility>
+ 
++#include <cstddef>
++#include <cstdint>
++#include <cstdio>
++#include <cerrno>
+ #include <fstream>
++#include <sstream>
+ 
+ #include "absl/algorithm/container.h"
+ #include "absl/container/inlined_vector.h"
+@@ -638,23 +644,72 @@ void VideoReceiveStream2::OnFrame(const VideoFrame& video_frame) {
+   source_tracker_.OnFrameDelivered(video_frame.packet_infos());
+   config_.renderer->OnFrame(video_frame);
+ 
+-  // RTC_INFO << "Save frames";
+-  std::ostringstream filename;
+-  filename << "/app/media/res_video/received_" << video_frame.first_rtp_sequence << ".yuv";
+-  std::ofstream wf(filename.str(), std::ios::out | std::ios::binary);
+-  if (!wf) {
++    if (::access("/app/media/res_video", W_OK) == 0) {
++    // Legacy Pandia dump path. Keep it stride-safe even when this branch is
++    // not used by the camera external recorder.
++    std::ostringstream filename;
++    filename << "/app/media/res_video/received_"
++             << video_frame.first_rtp_sequence << ".yuv";
++    std::ostringstream temporary_filename;
++    temporary_filename << filename.str() << ".tmp";
++
++    rtc::scoped_refptr<webrtc::I420BufferInterface> i420 =
++        video_frame.video_frame_buffer()->ToI420();
++    if (!i420) {
++      RTC_TS << "I420 export: conversion failed";
++      return;
++    }
++
++    auto write_plane = [](std::ofstream& out, const uint8_t* data,
++                          int stride, int row_bytes, int rows) {
++      if (!data || stride < row_bytes || row_bytes <= 0 || rows <= 0) {
++        return false;
++      }
++      for (int row = 0; row < rows; ++row) {
++        const uint8_t* source =
++            data + static_cast<std::ptrdiff_t>(row) * stride;
++        out.write(reinterpret_cast<const char*>(source), row_bytes);
++        if (!out) {
++          return false;
++        }
++      }
++      return true;
++    };
++
++    std::ofstream wf(temporary_filename.str(),
++                     std::ios::out | std::ios::binary | std::ios::trunc);
++    if (!wf) {
+       RTC_TS << "Failed to open the dumping file";
+       return;
+-  }
+-  int size = video_frame.width() * video_frame.height() * 3 / 2;
+-  uint8_t* data = new uint8_t[size];
+-  memcpy(data, video_frame.video_frame_buffer()->GetI420()->DataY(), video_frame.width() * video_frame.height());
+-  memcpy(data + video_frame.width() * video_frame.height(), video_frame.video_frame_buffer()->GetI420()->DataU(), video_frame.width() * video_frame.height() / 4);
+-  memcpy(data + video_frame.width() * video_frame.height() * 5 / 4, video_frame.video_frame_buffer()->GetI420()->DataV(), video_frame.width() * video_frame.height() / 4);
+-  wf.write((char*)data, size);
+-  wf.close();
+-  RTC_TS << "Dump to " << filename.str() << ", " << video_frame.width() << "x" << video_frame.height();
+-  delete[] data;
++    }
++
++    const int width = i420->width();
++    const int height = i420->height();
++    const int chroma_width = (width + 1) / 2;
++    const int chroma_height = (height + 1) / 2;
++    const bool write_ok =
++        write_plane(wf, i420->DataY(), i420->StrideY(), width, height) &&
++        write_plane(wf, i420->DataU(), i420->StrideU(), chroma_width,
++                    chroma_height) &&
++        write_plane(wf, i420->DataV(), i420->StrideV(), chroma_width,
++                    chroma_height);
++    wf.close();
++    if (!write_ok || !wf) {
++      RTC_TS << "Frame write failed for " << temporary_filename.str();
++      std::remove(temporary_filename.str().c_str());
++      return;
++    }
++    if (std::rename(temporary_filename.str().c_str(),
++                    filename.str().c_str()) != 0) {
++      RTC_TS << "Rename failed for " << filename.str()
++             << ", errno=" << errno;
++      std::remove(temporary_filename.str().c_str());
++      return;
++    }
++    RTC_TS << "Dump to " << filename.str() << ", " << width << "x" << height
++           << ", stride " << i420->StrideY() << "/" << i420->StrideU() << "/"
++           << i420->StrideV();
++    }
+ 
+   webrtc::MutexLock lock(&pending_resolution_mutex_);
+   if (pending_resolution_.has_value()) {

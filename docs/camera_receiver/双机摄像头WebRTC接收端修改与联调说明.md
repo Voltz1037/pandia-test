@@ -92,6 +92,9 @@ Received 183 bytes from peer
 
 ## 2. 最快解决方式：使用同一 binary
 
+> 花屏修复后的 Receiver 推荐使用 `bin/peerconnection_camera_stridefix`，SHA256 为 `1c26c76cafe55a007cff285ea5346b956d73382a272dc7e1c3c1c54ced52c4ef`。Sender 可以继续使用 `bin/peerconnection_camera`，两者信令兼容；但 Receiver 若要输出正确 YUV，应使用 stridefix 版本。
+
+
 本仓库提供了已经修复并验证过的 Linux x86-64 binary：
 
 ```text
@@ -302,7 +305,7 @@ Failed to initialize the ADM
 
 ## 6. 实时显示和生成 MP4
 
-> 显示方案兼容性、旧 FIFO v2 补丁与新版摄像头 binary 的差异，见：docs/camera_receiver/双机实时显示方案统一与待修改项.md。当前双机摄像头测试先使用本文件的 in/peerconnection_camera + 外部录制方案；旧的 peerconnection_client_headless_ffplay_v2 不能直接与新版 Sender 配对。
+> 显示方案兼容性、旧 FIFO v2 补丁与新版摄像头 binary 的差异，见：docs/camera_receiver/双机实时显示方案统一与待修改项.md。当前双机摄像头测试先使用本文件的 `bin/peerconnection_camera + 外部录制方案；旧的 peerconnection_client_headless_ffplay_v2 不能直接与新版 Sender 配对。
 
 
 仓库同时提供：

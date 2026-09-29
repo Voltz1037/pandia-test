@@ -156,11 +156,11 @@ wsl -d Ubuntu
 执行：
 
 ```bash
-/home/cjq/Workspace/Pandia/bin/peerconnection_camera \
+/home/cjq/Workspace/Pandia/bin/peerconnection_camera_5fps \
   --server 127.0.0.1 \
   --port 9999 \
   --width 640 \
-  --fps 30 \
+  --fps 5 \
   --path camera
 ```
 
@@ -255,22 +255,22 @@ Receiver 机器仍执行第 5、6 步。
 Sender 机器只修改服务器地址：
 
 ```bash
-/home/cjq/Workspace/Pandia/bin/peerconnection_camera \
+/home/cjq/Workspace/Pandia/bin/peerconnection_camera_5fps \
   --server 192.168.18.接收端IP \
   --port 9999 \
   --width 640 \
-  --fps 30 \
+  --fps 5 \
   --path camera
 ```
 
 例如 Receiver 是 `192.168.18.65`：
 
 ```bash
-/home/cjq/Workspace/Pandia/bin/peerconnection_camera \
+/home/cjq/Workspace/Pandia/bin/peerconnection_camera_5fps \
   --server 192.168.18.65 \
   --port 9999 \
   --width 640 \
-  --fps 30 \
+  --fps 5 \
   --path camera
 ```
 
